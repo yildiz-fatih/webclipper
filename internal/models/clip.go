@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -15,6 +16,26 @@ type Clip struct {
 
 type ClipModel struct {
 	DB *sql.DB
+}
+
+var ErrNotFound = errors.New("record not found")
+
+func (m *ClipModel) Get(id string) (Clip, error) {
+	query := `SELECT id, url, clean_html, created_at, expires_at 
+	FROM clips 
+	WHERE expires_at > NOW() AND id = $1`
+
+	var c Clip
+
+	err := m.DB.QueryRow(query, id).Scan(&c.ID, &c.URL, &c.CleanHTML, &c.CreatedAt, &c.ExpiresAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Clip{}, ErrNotFound
+		}
+		return Clip{}, err
+	}
+
+	return c, nil
 }
 
 func (m *ClipModel) Insert(url, cleanHTML string) (Clip, error) {
