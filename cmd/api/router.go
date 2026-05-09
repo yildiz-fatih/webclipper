@@ -7,5 +7,5 @@ func (app *application) newRouter() http.Handler {
 
 	mux.HandleFunc("GET /health", app.getHealth)
 
-	return mux
+	return app.recoverPanic(mux)
 }
