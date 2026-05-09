@@ -8,10 +8,12 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
+	"github.com/yildiz-fatih/webclipper/internal/models"
 )
 
 type application struct {
-	logger *slog.Logger
+	logger    *slog.Logger
+	clipModel *models.ClipModel
 }
 
 func main() {
@@ -48,7 +50,8 @@ func main() {
 	logger.Info("connected to database")
 
 	app := &application{
-		logger: logger,
+		logger:    logger,
+		clipModel: &models.ClipModel{DB: db},
 	}
 
 	server := &http.Server{
