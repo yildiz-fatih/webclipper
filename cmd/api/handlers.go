@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 )
@@ -17,13 +16,9 @@ func (app *application) getHealth(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now().UTC(),
 	}
 
-	js, err := json.Marshal(res)
+	err := writeJSON(w, http.StatusOK, nil, res)
 	if err != nil {
-		app.logger.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		app.serverError(w, err)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(js)
 }
