@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"codeberg.org/readeck/go-readability/v2"
@@ -83,7 +85,7 @@ func (app *application) postClip(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 	// get the html content of the url
-	fetchRes, err := http.Get(req.URL)
+	fetchRes, err := app.httpClient.Get(req.URL)
 	if err != nil {
 		app.serverError(w, err)
 		return
@@ -106,7 +108,7 @@ func (app *application) postClip(w http.ResponseWriter, r *http.Request) {
 		app.serverError(w, err)
 		return
 	}
-	cleanHTML := buf.String()
+	cleanHTML := fmt.Sprintf("<html><head><title>%s</title></head><body>%s</body></html>", article.Title(), buf.String())
 	// save to database
 	clip, err := app.clipModel.Insert(req.URL, cleanHTML)
 	if err != nil {
@@ -177,8 +179,19 @@ func (app *application) postClipExport(w http.ResponseWriter, r *http.Request) {
 		}
 	case "epub":
 		// convert to epub
+		epubReader, err := app.htmlToEPUB(clip.CleanHTML)
+		if err != nil {
+			app.serverError(w, err)
+			return
+		}
+		defer epubReader.Close()
 		// send the epub as response
-		w.Write([]byte("not implemented yet"))
+		w.Header().Set("Content-Type", "application/epub+zip")
+		_, err = io.Copy(w, epubReader)
+		if err != nil {
+			app.serverError(w, err)
+			return
+		}
 	}
 }
 
@@ -190,6 +203,23 @@ func (app *application) htmlToPDF(htmlContent string) (io.ReadCloser, error) {
 	}
 
 	res, err := app.gotenbergClient.Send(context.Background(), gotenberg.NewHTMLRequest(doc))
+	if err != nil {
+		return nil, err
+	}
+
+	return res.Body, nil
+}
+
+func (app *application) htmlToEPUB(htmlContent string) (io.ReadCloser, error) {
+	req, err := http.NewRequest("POST", app.pandocURL+"/api/convert/from/html/to/epub", strings.NewReader(htmlContent))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "text/html")
+	req.Header.Set("Content-Disposition", `attachment; filename="index.html"`)
+
+	res, err := app.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

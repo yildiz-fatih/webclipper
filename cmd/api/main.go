@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
@@ -16,6 +17,8 @@ type application struct {
 	logger          *slog.Logger
 	clipModel       *models.ClipModel
 	gotenbergClient *gotenberg.Client
+	httpClient      *http.Client
+	pandocURL       string
 }
 
 func main() {
@@ -28,6 +31,12 @@ func main() {
 	gotenbergURL := os.Getenv("GOTENBERG_URL")
 	if gotenbergURL == "" {
 		logger.Error("GOTENBERG_URL is not set")
+		os.Exit(1)
+	}
+
+	pandocURL := os.Getenv("PANDOC_URL")
+	if pandocURL == "" {
+		logger.Error("PANDOC_URL is not set")
 		os.Exit(1)
 	}
 
@@ -57,7 +66,9 @@ func main() {
 	}
 	logger.Info("connected to database")
 
-	gotenbergClient, err := gotenberg.NewClient(gotenbergURL, http.DefaultClient)
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+
+	gotenbergClient, err := gotenberg.NewClient(gotenbergURL, httpClient)
 	if err != nil {
 		logger.Error(err.Error())
 		os.Exit(1)
@@ -67,6 +78,8 @@ func main() {
 		logger:          logger,
 		clipModel:       &models.ClipModel{DB: db},
 		gotenbergClient: gotenbergClient,
+		httpClient:      httpClient,
+		pandocURL:       pandocURL,
 	}
 
 	server := &http.Server{
