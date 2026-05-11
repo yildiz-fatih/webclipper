@@ -8,12 +8,14 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
+	"github.com/starwalkn/gotenberg-go-client/v8"
 	"github.com/yildiz-fatih/webclipper/internal/models"
 )
 
 type application struct {
-	logger    *slog.Logger
-	clipModel *models.ClipModel
+	logger          *slog.Logger
+	clipModel       *models.ClipModel
+	gotenbergClient *gotenberg.Client
 }
 
 func main() {
@@ -22,6 +24,12 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	_ = godotenv.Load()
+
+	gotenbergURL := os.Getenv("GOTENBERG_URL")
+	if gotenbergURL == "" {
+		logger.Error("GOTENBERG_URL is not set")
+		os.Exit(1)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -49,9 +57,16 @@ func main() {
 	}
 	logger.Info("connected to database")
 
+	gotenbergClient, err := gotenberg.NewClient(gotenbergURL, http.DefaultClient)
+	if err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+
 	app := &application{
-		logger:    logger,
-		clipModel: &models.ClipModel{DB: db},
+		logger:          logger,
+		clipModel:       &models.ClipModel{DB: db},
+		gotenbergClient: gotenbergClient,
 	}
 
 	server := &http.Server{

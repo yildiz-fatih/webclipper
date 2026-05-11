@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
 
 	"codeberg.org/readeck/go-readability/v2"
+	"github.com/starwalkn/gotenberg-go-client/v8"
+	"github.com/starwalkn/gotenberg-go-client/v8/document"
 	"github.com/yildiz-fatih/webclipper/internal/models"
 )
 
@@ -118,6 +122,58 @@ func (app *application) postClip(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: clip.ExpiresAt,
 	}
 	err = writeJSON(w, http.StatusCreated, nil, res)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+}
+
+func (app *application) postClipExport(w http.ResponseWriter, r *http.Request) {
+	// get the id from the url path
+	id := r.PathValue("id")
+	// get the format from the request body
+	type postClipExportRequest struct {
+		Format string `json:"format"`
+	}
+	var req postClipExportRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		app.clientError(w, http.StatusBadRequest, http.StatusText(http.StatusBadRequest))
+		return
+	}
+	defer r.Body.Close()
+	// validate the format
+	if req.Format != "pdf" {
+		app.clientError(w, http.StatusBadRequest, "unsupported format")
+		return
+	}
+	// get the clean html from database
+	clip, err := app.clipModel.Get(id)
+	if err != nil {
+		if errors.Is(err, models.ErrNotFound) {
+			app.clientError(w, http.StatusNotFound, http.StatusText(http.StatusNotFound))
+			return
+		}
+		app.serverError(w, err)
+		return
+	}
+	// convert to pdf
+	doc, err := document.FromString("index.html", clip.CleanHTML)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	res, err := app.gotenbergClient.Send(context.Background(), gotenberg.NewHTMLRequest(doc))
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+	defer res.Body.Close()
+
+	// send the pdf as response
+	w.Header().Set("Content-Type", "application/pdf")
+	_, err = io.Copy(w, res.Body)
 	if err != nil {
 		app.serverError(w, err)
 		return
