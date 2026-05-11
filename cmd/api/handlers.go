@@ -143,10 +143,11 @@ func (app *application) postClipExport(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 	// validate the format
-	if req.Format != "pdf" {
+	if req.Format != "pdf" && req.Format != "epub" {
 		app.clientError(w, http.StatusBadRequest, "unsupported format")
 		return
 	}
+
 	// get the clean html from database
 	clip, err := app.clipModel.Get(id)
 	if err != nil {
@@ -157,25 +158,41 @@ func (app *application) postClipExport(w http.ResponseWriter, r *http.Request) {
 		app.serverError(w, err)
 		return
 	}
+
+	switch req.Format {
+	case "pdf":
+		// convert to pdf
+		pdfReader, err := app.htmlToPDF(clip.CleanHTML)
+		if err != nil {
+			app.serverError(w, err)
+			return
+		}
+		defer pdfReader.Close()
+		// send the pdf as response
+		w.Header().Set("Content-Type", "application/pdf")
+		_, err = io.Copy(w, pdfReader)
+		if err != nil {
+			app.serverError(w, err)
+			return
+		}
+	case "epub":
+		// convert to epub
+		// send the epub as response
+		w.Write([]byte("not implemented yet"))
+	}
+}
+
+func (app *application) htmlToPDF(htmlContent string) (io.ReadCloser, error) {
 	// convert to pdf
-	doc, err := document.FromString("index.html", clip.CleanHTML)
+	doc, err := document.FromString("index.html", htmlContent)
 	if err != nil {
-		app.serverError(w, err)
-		return
+		return nil, err
 	}
 
 	res, err := app.gotenbergClient.Send(context.Background(), gotenberg.NewHTMLRequest(doc))
 	if err != nil {
-		app.serverError(w, err)
-		return
+		return nil, err
 	}
-	defer res.Body.Close()
 
-	// send the pdf as response
-	w.Header().Set("Content-Type", "application/pdf")
-	_, err = io.Copy(w, res.Body)
-	if err != nil {
-		app.serverError(w, err)
-		return
-	}
+	return res.Body, nil
 }
