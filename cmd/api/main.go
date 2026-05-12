@@ -4,21 +4,21 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
+	"github.com/hibiken/asynq"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
-	"github.com/starwalkn/gotenberg-go-client/v8"
 	"github.com/yildiz-fatih/webclipper/internal/models"
 )
 
 type application struct {
-	logger          *slog.Logger
-	clipModel       *models.ClipModel
-	gotenbergClient *gotenberg.Client
-	httpClient      *http.Client
-	pandocURL       string
+	logger      *slog.Logger
+	clipModel   *models.ClipModel
+	httpClient  *http.Client
+	asynqClient *asynq.Client
 }
 
 func main() {
@@ -28,15 +28,9 @@ func main() {
 
 	_ = godotenv.Load()
 
-	gotenbergURL := os.Getenv("GOTENBERG_URL")
-	if gotenbergURL == "" {
-		logger.Error("GOTENBERG_URL is not set")
-		os.Exit(1)
-	}
-
-	pandocURL := os.Getenv("PANDOC_URL")
-	if pandocURL == "" {
-		logger.Error("PANDOC_URL is not set")
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		logger.Error("REDIS_URL is not set")
 		os.Exit(1)
 	}
 
@@ -68,18 +62,19 @@ func main() {
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
-	gotenbergClient, err := gotenberg.NewClient(gotenbergURL, httpClient)
+	parsedRedisURL, err := url.Parse(redisURL)
 	if err != nil {
 		logger.Error(err.Error())
 		os.Exit(1)
 	}
+	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: parsedRedisURL.Host})
+	defer asynqClient.Close()
 
 	app := &application{
-		logger:          logger,
-		clipModel:       &models.ClipModel{DB: db},
-		gotenbergClient: gotenbergClient,
-		httpClient:      httpClient,
-		pandocURL:       pandocURL,
+		logger:      logger,
+		clipModel:   &models.ClipModel{DB: db},
+		httpClient:  httpClient,
+		asynqClient: asynqClient,
 	}
 
 	server := &http.Server{

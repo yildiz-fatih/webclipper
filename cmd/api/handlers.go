@@ -2,20 +2,17 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"codeberg.org/readeck/go-readability/v2"
-	"github.com/starwalkn/gotenberg-go-client/v8"
-	"github.com/starwalkn/gotenberg-go-client/v8/document"
+	"github.com/hibiken/asynq"
 	"github.com/yildiz-fatih/webclipper/internal/models"
+	"github.com/yildiz-fatih/webclipper/internal/tasks"
 )
 
 type clipResponse struct {
@@ -150,7 +147,7 @@ func (app *application) postClipExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// get the clean html from database
+	// get clip from database
 	clip, err := app.clipModel.Get(id)
 	if err != nil {
 		if errors.Is(err, models.ErrNotFound) {
@@ -161,68 +158,42 @@ func (app *application) postClipExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch req.Format {
-	case "pdf":
-		// convert to pdf
-		pdfReader, err := app.htmlToPDF(clip.CleanHTML)
-		if err != nil {
-			app.serverError(w, err)
-			return
-		}
-		defer pdfReader.Close()
-		// send the pdf as response
-		w.Header().Set("Content-Type", "application/pdf")
-		_, err = io.Copy(w, pdfReader)
-		if err != nil {
-			app.serverError(w, err)
-			return
-		}
-	case "epub":
-		// convert to epub
-		epubReader, err := app.htmlToEPUB(clip.CleanHTML)
-		if err != nil {
-			app.serverError(w, err)
-			return
-		}
-		defer epubReader.Close()
-		// send the epub as response
-		w.Header().Set("Content-Type", "application/epub+zip")
-		_, err = io.Copy(w, epubReader)
-		if err != nil {
-			app.serverError(w, err)
-			return
-		}
+	payload := tasks.ExportPayload{
+		Format:    req.Format,
+		CleanHTML: clip.CleanHTML,
+	}
+	payloadJson, err := json.Marshal(payload)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+
+	// enqueue the task
+	taskInfo, err := app.asynqClient.Enqueue(asynq.NewTask(tasks.TypeExport, payloadJson))
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+	app.logger.Info("enqueued task", "id", taskInfo.ID, "type", taskInfo.Type, "queue", taskInfo.Queue)
+	// return immediately
+	type postExportResponse struct {
+		ExportID string `json:"export_id"`
+		Status   string `json:"status"`
+	}
+	res := postExportResponse{
+		ExportID: taskInfo.ID,
+		Status:   "pending",
+	}
+	err = writeJSON(w, http.StatusAccepted, nil, res)
+	if err != nil {
+		app.serverError(w, err)
+		return
 	}
 }
 
-func (app *application) htmlToPDF(htmlContent string) (io.ReadCloser, error) {
-	// convert to pdf
-	doc, err := document.FromString("index.html", htmlContent)
-	if err != nil {
-		return nil, err
-	}
-
-	res, err := app.gotenbergClient.Send(context.Background(), gotenberg.NewHTMLRequest(doc))
-	if err != nil {
-		return nil, err
-	}
-
-	return res.Body, nil
-}
-
-func (app *application) htmlToEPUB(htmlContent string) (io.ReadCloser, error) {
-	req, err := http.NewRequest("POST", app.pandocURL+"/api/convert/from/html/to/epub", strings.NewReader(htmlContent))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "text/html")
-	req.Header.Set("Content-Disposition", `attachment; filename="index.html"`)
-
-	res, err := app.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	return res.Body, nil
+func (app *application) getExport(w http.ResponseWriter, r *http.Request) {
+	// get the id from the url path
+	id := r.PathValue("id")
+	fmt.Println(id)
+	fmt.Println("not implemented yet")
 }

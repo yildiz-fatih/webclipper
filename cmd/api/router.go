@@ -9,6 +9,7 @@ func (app *application) newRouter() http.Handler {
 	mux.HandleFunc("GET /clips/{id}", app.getClip)
 	mux.HandleFunc("POST /clips", app.postClip)
 	mux.HandleFunc("POST /clips/{id}/export", app.postClipExport)
+	mux.HandleFunc("GET /exports/{id}", app.getExport)
 
 	return app.recoverPanic(mux)
 }
