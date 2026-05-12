@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log/slog"
 	"net/http"
@@ -8,6 +9,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/hibiken/asynq"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
@@ -15,10 +19,14 @@ import (
 )
 
 type application struct {
-	logger      *slog.Logger
-	clipModel   *models.ClipModel
-	httpClient  *http.Client
-	asynqClient *asynq.Client
+	logger          *slog.Logger
+	clipModel       *models.ClipModel
+	httpClient      *http.Client
+	asynqClient     *asynq.Client
+	asynqInspector  *asynq.Inspector
+	s3Client        *s3.Client
+	s3PresignClient *s3.PresignClient
+	s3Bucket        string
 }
 
 func main() {
@@ -27,6 +35,30 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	_ = godotenv.Load()
+
+	awsRegion := os.Getenv("AWS_REGION")
+	if awsRegion == "" {
+		logger.Error("AWS_REGION is not set")
+		os.Exit(1)
+	}
+
+	awsAccessKeyID := os.Getenv("AWS_ACCESS_KEY_ID")
+	if awsAccessKeyID == "" {
+		logger.Error("AWS_ACCESS_KEY_ID is not set")
+		os.Exit(1)
+	}
+
+	awsSecretAccessKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	if awsSecretAccessKey == "" {
+		logger.Error("AWS_SECRET_ACCESS_KEY is not set")
+		os.Exit(1)
+	}
+
+	s3BucketName := os.Getenv("S3_BUCKET_NAME")
+	if s3BucketName == "" {
+		logger.Error("S3_BUCKET_NAME is not set")
+		os.Exit(1)
+	}
 
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
@@ -70,11 +102,30 @@ func main() {
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: parsedRedisURL.Host})
 	defer asynqClient.Close()
 
+	asynqInspector := asynq.NewInspector(asynq.RedisClientOpt{Addr: parsedRedisURL.Host})
+
+	sdkConfig, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+	s3Client := s3.NewFromConfig(sdkConfig, func(o *s3.Options) {
+		o.DisableS3ExpressSessionAuth = aws.Bool(false)
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+	})
+
+	s3PresignClient := s3.NewPresignClient(s3Client)
+
 	app := &application{
-		logger:      logger,
-		clipModel:   &models.ClipModel{DB: db},
-		httpClient:  httpClient,
-		asynqClient: asynqClient,
+		logger:          logger,
+		clipModel:       &models.ClipModel{DB: db},
+		httpClient:      httpClient,
+		asynqClient:     asynqClient,
+		asynqInspector:  asynqInspector,
+		s3Client:        s3Client,
+		s3PresignClient: s3PresignClient,
+		s3Bucket:        s3BucketName,
 	}
 
 	server := &http.Server{

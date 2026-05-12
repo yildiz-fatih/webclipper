@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"codeberg.org/readeck/go-readability/v2"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/hibiken/asynq"
 	"github.com/yildiz-fatih/webclipper/internal/models"
 	"github.com/yildiz-fatih/webclipper/internal/tasks"
@@ -169,7 +171,7 @@ func (app *application) postClipExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// enqueue the task
-	taskInfo, err := app.asynqClient.Enqueue(asynq.NewTask(tasks.TypeExport, payloadJson))
+	taskInfo, err := app.asynqClient.Enqueue(asynq.NewTask(tasks.TypeExport, payloadJson), asynq.Retention(24*time.Hour))
 	if err != nil {
 		app.serverError(w, err)
 		return
@@ -194,6 +196,46 @@ func (app *application) postClipExport(w http.ResponseWriter, r *http.Request) {
 func (app *application) getExport(w http.ResponseWriter, r *http.Request) {
 	// get the id from the url path
 	id := r.PathValue("id")
-	fmt.Println(id)
-	fmt.Println("not implemented yet")
+	// check task status
+	taskInfo, err := app.asynqInspector.GetTaskInfo("default", id)
+	if err != nil {
+		app.serverError(w, err)
+		return
+	}
+	switch taskInfo.State {
+	case asynq.TaskStateCompleted:
+		// get the file from s3 and return as response
+		var payload tasks.ExportPayload
+		err := json.Unmarshal(taskInfo.Payload, &payload)
+		if err != nil {
+			app.serverError(w, err)
+			return
+		}
+
+		request, err := app.s3PresignClient.PresignGetObject(r.Context(), &s3.GetObjectInput{
+			Bucket: aws.String(app.s3Bucket),
+			Key:    aws.String(id + "." + payload.Format),
+		}, func(opts *s3.PresignOptions) {
+			opts.Expires = time.Duration(1 * time.Hour)
+		})
+		if err != nil {
+			app.serverError(w, err)
+			return
+		}
+		// return the presigned url as response
+		writeJSON(w, 200, nil, map[string]string{
+			"download_url": request.URL,
+		})
+		return
+	case asynq.TaskStateArchived:
+		writeJSON(w, http.StatusInternalServerError, nil, map[string]string{
+			"status": "failed",
+		})
+		return
+	default:
+		writeJSON(w, http.StatusAccepted, nil, map[string]string{
+			"status": "pending",
+		})
+		return
+	}
 }

@@ -1,12 +1,16 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/hibiken/asynq"
 	"github.com/starwalkn/gotenberg-go-client/v8"
 	"github.com/starwalkn/gotenberg-go-client/v8/document"
@@ -16,6 +20,8 @@ type Exporter struct {
 	GotenbergClient *gotenberg.Client
 	HttpClient      *http.Client
 	PandocURL       string
+	S3Client        *s3.Client
+	S3Bucket        string
 }
 
 const (
@@ -42,15 +48,23 @@ func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
 			return err
 		}
 		defer pdfReader.Close()
-		/*
-			// send the pdf as response
-			w.Header().Set("Content-Type", "application/pdf")
-			_, err = io.Copy(w, pdfReader)
-			if err != nil {
-				app.serverError(w, err)
-				return
-			}
-		*/
+		// save file in s3
+		taskID, ok := asynq.GetTaskID(ctx)
+		if !ok {
+			return errors.New("could not get task id from context")
+		}
+		pdfBytes, err := io.ReadAll(pdfReader)
+		if err != nil {
+			return err
+		}
+		_, err = exp.S3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(exp.S3Bucket),
+			Key:    aws.String(taskID + "." + payload.Format),
+			Body:   bytes.NewReader(pdfBytes),
+		})
+		if err != nil {
+			return err
+		}
 	case "epub":
 		// convert to epub
 		epubReader, err := exp.htmlToEPUB(payload.CleanHTML)
@@ -58,15 +72,25 @@ func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
 			return err
 		}
 		defer epubReader.Close()
-		/*
-			// send the epub as response
-			w.Header().Set("Content-Type", "application/epub+zip")
-			_, err = io.Copy(w, epubReader)
-			if err != nil {
-				app.serverError(w, err)
-				return
-			}
-		*/
+		// save file in s3
+		taskID, ok := asynq.GetTaskID(ctx)
+		if !ok {
+			return errors.New("could not get task id from context")
+		}
+		epubBytes, err := io.ReadAll(epubReader)
+		if err != nil {
+			return err
+		}
+		_, err = exp.S3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(exp.S3Bucket),
+			Key:    aws.String(taskID + "." + payload.Format),
+			Body:   bytes.NewReader(epubBytes),
+		})
+		if err != nil {
+			return err
+		}
+	default:
+		return errors.New("unsupported format: " + payload.Format)
 	}
 
 	return nil

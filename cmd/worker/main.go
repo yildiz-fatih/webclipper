@@ -1,13 +1,16 @@
 package main
 
 import (
-	"log"
+	"context"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/hibiken/asynq"
 	"github.com/joho/godotenv"
 	"github.com/starwalkn/gotenberg-go-client/v8"
@@ -37,6 +40,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	s3BucketName := os.Getenv("S3_BUCKET_NAME")
+	if s3BucketName == "" {
+		logger.Error("S3_BUCKET_NAME is not set")
+		os.Exit(1)
+	}
+
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
 	gotenbergClient, err := gotenberg.NewClient(gotenbergURL, httpClient)
@@ -45,10 +54,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	sdkConfig, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+	s3Client := s3.NewFromConfig(sdkConfig, func(o *s3.Options) {
+		o.DisableS3ExpressSessionAuth = aws.Bool(false)
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+	})
+
 	exporter := &tasks.Exporter{
 		GotenbergClient: gotenbergClient,
 		HttpClient:      httpClient,
 		PandocURL:       pandocURL,
+		S3Client:        s3Client,
+		S3Bucket:        s3BucketName,
 	}
 
 	parsedRedisURL, err := url.Parse(redisURL)
@@ -70,7 +92,7 @@ func main() {
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(tasks.TypeExport, exporter.HandleExport)
 
-	log.Println("Worker starting...")
+	logger.Info("starting worker", "type", tasks.TypeExport)
 	err = asynqServer.Run(mux)
 	if err != nil {
 		logger.Error(err.Error())
