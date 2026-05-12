@@ -89,9 +89,10 @@ func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
 			return err
 		}
 		_, err = exp.S3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket: aws.String(exp.S3Bucket),
-			Key:    aws.String(taskID + "." + payload.Format),
-			Body:   bytes.NewReader(epubBytes),
+			Bucket:      aws.String(exp.S3Bucket),
+			Key:         aws.String(taskID + "." + payload.Format),
+			Body:        bytes.NewReader(epubBytes),
+			ContentType: aws.String("application/epub+zip"),
 		})
 		if err != nil {
 			return err
