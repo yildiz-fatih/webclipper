@@ -14,9 +14,11 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/starwalkn/gotenberg-go-client/v8"
 	"github.com/starwalkn/gotenberg-go-client/v8/document"
+	"github.com/yildiz-fatih/webclipper/internal/models"
 )
 
 type Exporter struct {
+	ClipModel       *models.ClipModel
 	GotenbergClient *gotenberg.Client
 	HttpClient      *http.Client
 	PandocURL       string
@@ -29,8 +31,8 @@ const (
 )
 
 type ExportPayload struct {
-	Format    string `json:"format"`
-	CleanHTML string `json:"clean_html"`
+	Format string `json:"format"`
+	ClipID string `json:"clip_id"`
 }
 
 func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
@@ -40,10 +42,15 @@ func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
 		return err
 	}
 
+	clip, err := exp.ClipModel.Get(payload.ClipID)
+	if err != nil {
+		return err
+	}
+
 	switch payload.Format {
 	case "pdf":
 		// convert to pdf
-		pdfReader, err := exp.htmlToPDF(payload.CleanHTML)
+		pdfReader, err := exp.htmlToPDF(clip.CleanHTML)
 		if err != nil {
 			return err
 		}
@@ -67,7 +74,7 @@ func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
 		}
 	case "epub":
 		// convert to epub
-		epubReader, err := exp.htmlToEPUB(payload.CleanHTML)
+		epubReader, err := exp.htmlToEPUB(clip.CleanHTML)
 		if err != nil {
 			return err
 		}

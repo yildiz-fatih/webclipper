@@ -161,8 +161,8 @@ func (app *application) postClipExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := tasks.ExportPayload{
-		Format:    req.Format,
-		CleanHTML: clip.CleanHTML,
+		Format: req.Format,
+		ClipID: clip.ID,
 	}
 	payloadJson, err := json.Marshal(payload)
 	if err != nil {
