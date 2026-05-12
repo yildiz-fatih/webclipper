@@ -115,6 +115,9 @@ func (exp *Exporter) htmlToPDF(htmlContent string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, errors.New("gotenberg failed with status code: " + res.Status)
+	}
 
 	return res.Body, nil
 }
@@ -131,6 +134,9 @@ func (exp *Exporter) htmlToEPUB(htmlContent string) (io.ReadCloser, error) {
 	res, err := exp.HttpClient.Do(req)
 	if err != nil {
 		return nil, err
+	}
+	if res.StatusCode >= 200 && res.StatusCode < 300 {
+		return nil, errors.New("pandoc failed with status code: " + res.Status)
 	}
 
 	return res.Body, nil
