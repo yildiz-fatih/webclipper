@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -15,7 +14,6 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/joho/godotenv"
 	"github.com/starwalkn/gotenberg-go-client/v8"
-	"github.com/yildiz-fatih/webclipper/internal/models"
 	"github.com/yildiz-fatih/webclipper/internal/tasks"
 )
 
@@ -48,26 +46,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		logger.Error("DATABASE_URL is not set")
-		os.Exit(1)
-	}
-
-	db, err := sql.Open("pgx", dbURL)
-	if err != nil {
-		logger.Error(err.Error())
-		os.Exit(1)
-	}
-	defer db.Close()
-
-	err = db.Ping()
-	if err != nil {
-		logger.Error(err.Error())
-		os.Exit(1)
-	}
-	logger.Info("connected to database")
-
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
 	gotenbergClient, err := gotenberg.NewClient(gotenbergURL, httpClient)
@@ -87,8 +65,7 @@ func main() {
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
 
-	exporter := &tasks.Exporter{
-		ClipModel:       &models.ClipModel{DB: db},
+	clipper := &tasks.Clipper{
 		GotenbergClient: gotenbergClient,
 		HttpClient:      httpClient,
 		PandocURL:       pandocURL,
@@ -113,9 +90,9 @@ func main() {
 	})
 
 	mux := asynq.NewServeMux()
-	mux.HandleFunc(tasks.TypeExport, exporter.HandleExport)
+	mux.HandleFunc(tasks.TypeClipping, clipper.HandleClipping)
 
-	logger.Info("starting worker", "type", tasks.TypeExport)
+	logger.Info("starting worker", "type", tasks.TypeClipping)
 	err = asynqServer.Run(mux)
 	if err != nil {
 		logger.Error(err.Error())

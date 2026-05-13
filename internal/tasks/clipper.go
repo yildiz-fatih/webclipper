@@ -5,20 +5,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
+	"codeberg.org/readeck/go-readability/v2"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/hibiken/asynq"
 	"github.com/starwalkn/gotenberg-go-client/v8"
 	"github.com/starwalkn/gotenberg-go-client/v8/document"
-	"github.com/yildiz-fatih/webclipper/internal/models"
 )
 
-type Exporter struct {
-	ClipModel       *models.ClipModel
+type Clipper struct {
 	GotenbergClient *gotenberg.Client
 	HttpClient      *http.Client
 	PandocURL       string
@@ -27,30 +28,47 @@ type Exporter struct {
 }
 
 const (
-	TypeExport = "export"
+	TypeClipping = "clipping"
 )
 
-type ExportPayload struct {
+type ClippingPayload struct {
+	URL    string `json:"url"`
 	Format string `json:"format"`
-	ClipID string `json:"clip_id"`
 }
 
-func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
-	payload := ExportPayload{}
+func (c *Clipper) HandleClipping(ctx context.Context, t *asynq.Task) error {
+	payload := ClippingPayload{}
 	err := json.Unmarshal(t.Payload(), &payload)
 	if err != nil {
 		return err
 	}
 
-	clip, err := exp.ClipModel.Get(payload.ClipID)
+	// get the html content of the url
+	fetchRes, err := c.HttpClient.Get(payload.URL)
 	if err != nil {
 		return err
 	}
+	defer fetchRes.Body.Close()
+	// clean the html content
+	parsedURL, err := url.Parse(payload.URL)
+	if err != nil {
+		return err
+	}
+	article, err := readability.FromReader(fetchRes.Body, parsedURL)
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	err = article.RenderHTML(&buf)
+	if err != nil {
+		return err
+	}
+	cleanHTML := fmt.Sprintf("<html><head><title>%s</title></head><body>%s</body></html>", article.Title(), buf.String())
 
 	switch payload.Format {
 	case "pdf":
 		// convert to pdf
-		pdfReader, err := exp.htmlToPDF(clip.CleanHTML)
+		pdfReader, err := c.htmlToPDF(cleanHTML)
 		if err != nil {
 			return err
 		}
@@ -64,8 +82,8 @@ func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
 		if err != nil {
 			return err
 		}
-		_, err = exp.S3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket: aws.String(exp.S3Bucket),
+		_, err = c.S3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(c.S3Bucket),
 			Key:    aws.String(taskID + "." + payload.Format),
 			Body:   bytes.NewReader(pdfBytes),
 		})
@@ -74,7 +92,7 @@ func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
 		}
 	case "epub":
 		// convert to epub
-		epubReader, err := exp.htmlToEPUB(clip.CleanHTML)
+		epubReader, err := c.htmlToEPUB(cleanHTML)
 		if err != nil {
 			return err
 		}
@@ -88,8 +106,8 @@ func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
 		if err != nil {
 			return err
 		}
-		_, err = exp.S3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:      aws.String(exp.S3Bucket),
+		_, err = c.S3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(c.S3Bucket),
 			Key:         aws.String(taskID + "." + payload.Format),
 			Body:        bytes.NewReader(epubBytes),
 			ContentType: aws.String("application/epub+zip"),
@@ -104,26 +122,27 @@ func (exp *Exporter) HandleExport(ctx context.Context, t *asynq.Task) error {
 	return nil
 }
 
-func (exp *Exporter) htmlToPDF(htmlContent string) (io.ReadCloser, error) {
+func (c *Clipper) htmlToPDF(htmlContent string) (io.ReadCloser, error) {
 	// convert to pdf
 	doc, err := document.FromString("index.html", htmlContent)
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := exp.GotenbergClient.Send(context.Background(), gotenberg.NewHTMLRequest(doc))
+	res, err := c.GotenbergClient.Send(context.Background(), gotenberg.NewHTMLRequest(doc))
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		res.Body.Close()
 		return nil, errors.New("gotenberg failed with status code: " + res.Status)
 	}
 
 	return res.Body, nil
 }
 
-func (exp *Exporter) htmlToEPUB(htmlContent string) (io.ReadCloser, error) {
-	req, err := http.NewRequest("POST", exp.PandocURL+"/api/convert/from/html/to/epub", strings.NewReader(htmlContent))
+func (c *Clipper) htmlToEPUB(htmlContent string) (io.ReadCloser, error) {
+	req, err := http.NewRequest("POST", c.PandocURL+"/api/convert/from/html/to/epub", strings.NewReader(htmlContent))
 	if err != nil {
 		return nil, err
 	}
@@ -131,11 +150,12 @@ func (exp *Exporter) htmlToEPUB(htmlContent string) (io.ReadCloser, error) {
 	req.Header.Set("Content-Type", "text/html")
 	req.Header.Set("Content-Disposition", `attachment; filename="index.html"`)
 
-	res, err := exp.HttpClient.Do(req)
+	res, err := c.HttpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
-	if res.StatusCode >= 200 && res.StatusCode < 300 {
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		res.Body.Close()
 		return nil, errors.New("pandoc failed with status code: " + res.Status)
 	}
 
