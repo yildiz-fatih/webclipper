@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -17,7 +16,6 @@ import (
 
 type application struct {
 	logger          *slog.Logger
-	httpClient      *http.Client
 	asynqClient     *asynq.Client
 	asynqInspector  *asynq.Inspector
 	s3Client        *s3.Client
@@ -50,8 +48,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-
 	parsedRedisURL, err := url.Parse(redisURL)
 	if err != nil {
 		logger.Error(err.Error())
@@ -77,7 +73,6 @@ func main() {
 
 	app := &application{
 		logger:          logger,
-		httpClient:      httpClient,
 		asynqClient:     asynqClient,
 		asynqInspector:  asynqInspector,
 		s3Client:        s3Client,
