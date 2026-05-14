@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,6 +15,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/joho/godotenv"
 	"github.com/starwalkn/gotenberg-go-client/v8"
+	"github.com/wneessen/go-mail"
 	"github.com/yildiz-fatih/webclipper/internal/tasks"
 )
 
@@ -46,6 +48,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := mail.DefaultPortTLS // sensible default
+	smtpPortStr := os.Getenv("SMTP_PORT")
+	if smtpPortStr != "" {
+		var err error
+		smtpPort, err = strconv.Atoi(smtpPortStr)
+		if err != nil {
+			logger.Error("SMTP_PORT is not a valid integer")
+			os.Exit(1)
+		}
+	}
+	smtpUser := os.Getenv("SMTP_USER")
+	smtpPass := os.Getenv("SMTP_PASS")
+	smtpFrom := os.Getenv("SMTP_FROM")
+
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 
 	gotenbergClient, err := gotenberg.NewClient(gotenbergURL, httpClient)
@@ -65,12 +82,29 @@ func main() {
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
 
+	var mailClient *mail.Client
+	if smtpHost != "" {
+		mailClient, err = mail.NewClient(
+			smtpHost,
+			mail.WithSMTPAuth(mail.SMTPAuthPlain),
+			mail.WithPort(smtpPort),
+			mail.WithUsername(smtpUser),
+			mail.WithPassword(smtpPass),
+		)
+		if err != nil {
+			logger.Error(err.Error())
+			os.Exit(1)
+		}
+	}
+
 	clipper := &tasks.Clipper{
 		GotenbergClient: gotenbergClient,
 		HttpClient:      httpClient,
 		PandocURL:       pandocURL,
 		S3Client:        s3Client,
 		S3Bucket:        s3BucketName,
+		SMTPFrom:        smtpFrom,
+		MailClient:      mailClient,
 	}
 
 	parsedRedisURL, err := url.Parse(redisURL)

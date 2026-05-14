@@ -14,9 +14,11 @@ import (
 	"codeberg.org/readeck/go-readability/v2"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/gosimple/slug"
 	"github.com/hibiken/asynq"
 	"github.com/starwalkn/gotenberg-go-client/v8"
 	"github.com/starwalkn/gotenberg-go-client/v8/document"
+	"github.com/wneessen/go-mail"
 )
 
 type Clipper struct {
@@ -25,6 +27,8 @@ type Clipper struct {
 	PandocURL       string
 	S3Client        *s3.Client
 	S3Bucket        string
+	SMTPFrom        string
+	MailClient      *mail.Client
 }
 
 const (
@@ -34,6 +38,7 @@ const (
 type ClippingPayload struct {
 	URL    string `json:"url"`
 	Format string `json:"format"`
+	Email  string `json:"email"`
 }
 
 func (c *Clipper) HandleClipping(ctx context.Context, t *asynq.Task) error {
@@ -41,6 +46,10 @@ func (c *Clipper) HandleClipping(ctx context.Context, t *asynq.Task) error {
 	err := json.Unmarshal(t.Payload(), &payload)
 	if err != nil {
 		return err
+	}
+
+	if payload.Email != "" && c.MailClient == nil {
+		return errors.New("SMTP is not configured")
 	}
 
 	// get the html content of the url
@@ -91,6 +100,14 @@ func (c *Clipper) HandleClipping(ctx context.Context, t *asynq.Task) error {
 		if err != nil {
 			return err
 		}
+
+		if payload.Email != "" {
+			filename := fmt.Sprintf("%s.%s", slug.Make(article.Title()), payload.Format)
+			err = c.sendEmail(payload.Email, article.Title(), filename, pdfBytes)
+			if err != nil {
+				return err
+			}
+		}
 	case "epub":
 		// convert to epub
 		epubReader, err := c.htmlToEPUB(cleanHTML)
@@ -116,6 +133,14 @@ func (c *Clipper) HandleClipping(ctx context.Context, t *asynq.Task) error {
 		if err != nil {
 			return err
 		}
+
+		if payload.Email != "" {
+			filename := fmt.Sprintf("%s.%s", slug.Make(article.Title()), payload.Format)
+			err = c.sendEmail(payload.Email, article.Title(), filename, epubBytes)
+			if err != nil {
+				return err
+			}
+		}
 	case "html":
 		// save file in s3
 		taskID, ok := asynq.GetTaskID(ctx)
@@ -130,6 +155,14 @@ func (c *Clipper) HandleClipping(ctx context.Context, t *asynq.Task) error {
 		})
 		if err != nil {
 			return err
+		}
+
+		if payload.Email != "" {
+			filename := fmt.Sprintf("%s.%s", slug.Make(article.Title()), payload.Format)
+			err = c.sendEmail(payload.Email, article.Title(), filename, []byte(cleanHTML))
+			if err != nil {
+				return err
+			}
 		}
 	default:
 		return errors.New("unsupported format: " + payload.Format)
@@ -176,4 +209,23 @@ func (c *Clipper) htmlToEPUB(htmlContent string) (io.ReadCloser, error) {
 	}
 
 	return res.Body, nil
+}
+
+func (c *Clipper) sendEmail(deliverTo string, title string, filename string, fileBytes []byte) error {
+	message := mail.NewMsg()
+	err := message.From(c.SMTPFrom)
+	if err != nil {
+		return err
+	}
+	err = message.To(deliverTo)
+	if err != nil {
+		return err
+	}
+	message.Subject("Your clipping is ready: " + title)
+	err = message.AttachReader(filename, bytes.NewReader(fileBytes))
+	if err != nil {
+		return err
+	}
+
+	return c.MailClient.DialAndSend(message)
 }

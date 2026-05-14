@@ -33,6 +33,7 @@ func (app *application) postClipping(w http.ResponseWriter, r *http.Request) {
 	type postClippingRequest struct {
 		URL    string `json:"url"`
 		Format string `json:"format"`
+		Email  string `json:"email"`
 	}
 	var req postClippingRequest
 	err := json.NewDecoder(r.Body).Decode(&req)
@@ -50,6 +51,7 @@ func (app *application) postClipping(w http.ResponseWriter, r *http.Request) {
 	payload := tasks.ClippingPayload{
 		URL:    req.URL,
 		Format: req.Format,
+		Email:  req.Email,
 	}
 	payloadJson, err := json.Marshal(payload)
 	if err != nil {
