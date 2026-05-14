@@ -42,7 +42,7 @@ func (app *application) postClipping(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 	// validate the format
-	if req.Format != "pdf" && req.Format != "epub" {
+	if req.Format != "pdf" && req.Format != "epub" && req.Format != "html" {
 		app.clientError(w, http.StatusBadRequest, "unsupported format")
 		return
 	}

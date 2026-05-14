@@ -83,9 +83,10 @@ func (c *Clipper) HandleClipping(ctx context.Context, t *asynq.Task) error {
 			return err
 		}
 		_, err = c.S3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket: aws.String(c.S3Bucket),
-			Key:    aws.String(taskID + "." + payload.Format),
-			Body:   bytes.NewReader(pdfBytes),
+			Bucket:      aws.String(c.S3Bucket),
+			Key:         aws.String(taskID + "." + payload.Format),
+			Body:        bytes.NewReader(pdfBytes),
+			ContentType: aws.String("application/pdf"),
 		})
 		if err != nil {
 			return err
@@ -111,6 +112,21 @@ func (c *Clipper) HandleClipping(ctx context.Context, t *asynq.Task) error {
 			Key:         aws.String(taskID + "." + payload.Format),
 			Body:        bytes.NewReader(epubBytes),
 			ContentType: aws.String("application/epub+zip"),
+		})
+		if err != nil {
+			return err
+		}
+	case "html":
+		// save file in s3
+		taskID, ok := asynq.GetTaskID(ctx)
+		if !ok {
+			return errors.New("could not get task id from context")
+		}
+		_, err = c.S3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(c.S3Bucket),
+			Key:         aws.String(taskID + "." + payload.Format),
+			Body:        strings.NewReader(cleanHTML),
+			ContentType: aws.String("text/html"),
 		})
 		if err != nil {
 			return err
