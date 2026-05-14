@@ -52,123 +52,118 @@ func (c *Clipper) HandleClipping(ctx context.Context, t *asynq.Task) error {
 		return errors.New("SMTP is not configured")
 	}
 
-	// get the html content of the url
-	fetchRes, err := c.HttpClient.Get(payload.URL)
+	// fetch and clean
+	cleanHTML, title, err := c.fetchAndClean(payload.URL)
 	if err != nil {
 		return err
+	}
+
+	// convert
+	fileBytes, err := c.convertTo(payload.Format, cleanHTML)
+	if err != nil {
+		return err
+	}
+
+	taskID, ok := asynq.GetTaskID(ctx)
+	if !ok {
+		return errors.New("could not get task id from context")
+	}
+
+	// upload
+	_, err = c.S3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(c.S3Bucket),
+		Key:         aws.String(taskID + "." + payload.Format),
+		Body:        bytes.NewReader(fileBytes),
+		ContentType: aws.String(contentTypeFor(payload.Format)),
+	})
+	if err != nil {
+		return err
+	}
+
+	// email
+	if payload.Email != "" {
+		filename := fmt.Sprintf("%s.%s", slug.Make(title), payload.Format)
+		err = c.sendEmail(payload.Email, title, filename, fileBytes)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func contentTypeFor(format string) string {
+	switch format {
+	case "pdf":
+		return "application/pdf"
+	case "epub":
+		return "application/epub+zip"
+	case "html":
+		return "text/html"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func (c *Clipper) fetchAndClean(targetURL string) (cleanHTML string, title string, err error) {
+	// get the html content of the url
+	fetchRes, err := c.HttpClient.Get(targetURL)
+	if err != nil {
+		return "", "", err
 	}
 	defer fetchRes.Body.Close()
 	// clean the html content
-	parsedURL, err := url.Parse(payload.URL)
+	parsedURL, err := url.Parse(targetURL)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	article, err := readability.FromReader(fetchRes.Body, parsedURL)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	var buf bytes.Buffer
 	err = article.RenderHTML(&buf)
 	if err != nil {
-		return err
+		return "", "", err
 	}
-	cleanHTML := fmt.Sprintf("<html><head><title>%s</title></head><body>%s</body></html>", article.Title(), buf.String())
+	clean := fmt.Sprintf("<html><head><title>%s</title></head><body>%s</body></html>", article.Title(), buf.String())
 
-	switch payload.Format {
+	return clean, article.Title(), nil
+}
+
+func (c *Clipper) convertTo(format string, cleanHTML string) ([]byte, error) {
+	switch format {
 	case "pdf":
-		// convert to pdf
-		pdfReader, err := c.htmlToPDF(cleanHTML)
+		reader, err := c.htmlToPDF(cleanHTML)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		defer pdfReader.Close()
-		// save file in s3
-		taskID, ok := asynq.GetTaskID(ctx)
-		if !ok {
-			return errors.New("could not get task id from context")
-		}
-		pdfBytes, err := io.ReadAll(pdfReader)
-		if err != nil {
-			return err
-		}
-		_, err = c.S3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:      aws.String(c.S3Bucket),
-			Key:         aws.String(taskID + "." + payload.Format),
-			Body:        bytes.NewReader(pdfBytes),
-			ContentType: aws.String("application/pdf"),
-		})
-		if err != nil {
-			return err
-		}
+		defer reader.Close()
 
-		if payload.Email != "" {
-			filename := fmt.Sprintf("%s.%s", slug.Make(article.Title()), payload.Format)
-			err = c.sendEmail(payload.Email, article.Title(), filename, pdfBytes)
-			if err != nil {
-				return err
-			}
+		fileBytes, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, err
 		}
+		return fileBytes, nil
 	case "epub":
-		// convert to epub
-		epubReader, err := c.htmlToEPUB(cleanHTML)
+		reader, err := c.htmlToEPUB(cleanHTML)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		defer epubReader.Close()
-		// save file in s3
-		taskID, ok := asynq.GetTaskID(ctx)
-		if !ok {
-			return errors.New("could not get task id from context")
-		}
-		epubBytes, err := io.ReadAll(epubReader)
+		defer reader.Close()
+
+		fileBytes, err := io.ReadAll(reader)
 		if err != nil {
-			return err
-		}
-		_, err = c.S3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:      aws.String(c.S3Bucket),
-			Key:         aws.String(taskID + "." + payload.Format),
-			Body:        bytes.NewReader(epubBytes),
-			ContentType: aws.String("application/epub+zip"),
-		})
-		if err != nil {
-			return err
+			return nil, err
 		}
 
-		if payload.Email != "" {
-			filename := fmt.Sprintf("%s.%s", slug.Make(article.Title()), payload.Format)
-			err = c.sendEmail(payload.Email, article.Title(), filename, epubBytes)
-			if err != nil {
-				return err
-			}
-		}
+		return fileBytes, nil
 	case "html":
-		// save file in s3
-		taskID, ok := asynq.GetTaskID(ctx)
-		if !ok {
-			return errors.New("could not get task id from context")
-		}
-		_, err = c.S3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:      aws.String(c.S3Bucket),
-			Key:         aws.String(taskID + "." + payload.Format),
-			Body:        strings.NewReader(cleanHTML),
-			ContentType: aws.String("text/html"),
-		})
-		if err != nil {
-			return err
-		}
-
-		if payload.Email != "" {
-			filename := fmt.Sprintf("%s.%s", slug.Make(article.Title()), payload.Format)
-			err = c.sendEmail(payload.Email, article.Title(), filename, []byte(cleanHTML))
-			if err != nil {
-				return err
-			}
-		}
+		fileBytes := []byte(cleanHTML)
+		return fileBytes, nil
 	default:
-		return errors.New("unsupported format: " + payload.Format)
+		return nil, errors.New("unsupported format: " + format)
 	}
-
-	return nil
 }
 
 func (c *Clipper) htmlToPDF(htmlContent string) (io.ReadCloser, error) {
